@@ -7,51 +7,125 @@ library(writexl)
 library(dplyr)
 library(cmapR)
 
-bmd_result <- fread("/mnt/Storage2/lishalin/EPFinder_Enrichment/BMD_EPFinder_positive_prediction.tsv")
-colnames(bmd_result)[4]<-"Target_Gene"
-bmd_result1 <- bmd_result[,c(1,2,3,5,6,8,9)]
-bmd_result2 <- bmd_result1[,c(4,6,7)]
-bmd_result2$source <- "BMD"
+#read in data
+bmd <- fread("/mnt/Storage2/lishalin/EPFinder_Enrichment/BMD_EPFinder_prediction.tsv")
+ebmd <- read.csv("/mnt/Storage2/lishalin/EPFinder_Enrichment/cojo_bf3_EPFinder_final.csv")
 
+ebmd_need <- ebmd[,c(5,4,2,8, 10,11,12,13)]
+bmd_need <- bmd[,c(5,7,8)]
 
+#For BMD, the column "SNPID hg38" looks like this: 1:8387662:T:C
+#seperate it into four columns: chr, position, ref, alt.
+bmd_need[, c("chr", "position", "ref", "alt") := tstrsplit(`SNPID hg38`, ":", fixed = TRUE)]
 
-#Do the same thing for eBMD.
-ebmd <- read.csv("/mnt/Storage2/lishalin/EPFinder_Enrichment/eBMD_EPFinder_positive_prediction.csv")
-ebmd_1 <- ebmd[,c(2,3,5)]
-ebmd_1$source <- "eBMD"
+#There are some rows that are duplicate except for column 3
+#that are duplicate in ebmd_need. 
+#For these rows, only keep the row with the 
+#highest value in column 3
+# Remove duplicates except for column 3, keeping the row with the highest value in column 3
+setDT(ebmd_need)
+# ...existing code...
+library(dplyr)
 
-#Now rename bmd and ebmd columns to make sure they match for the sake of merging.
-colnames(bmd_result2)<- c("SNP_id","Prediction_Gene","Prediction_Score","Source")
-colnames(ebmd_1)<- c("SNP_id","Prediction_Score","Prediction_Gene","Source")
-
-#
-filtered_bmd <- bmd_result2 %>%
-  group_by(SNP_id, Prediction_Gene) %>%
-  slice_max(order_by = Prediction_Score, n = 1, with_ties = FALSE) %>%
+ebmd_need1 <- ebmd_need %>%
+  group_by(across(1:2)) %>%
+  slice_max(order_by = .[[3]], n = 1, with_ties = FALSE) %>%
   ungroup()
 
-#
-filtered_ebmd <- ebmd_1 %>%
-  group_by(SNP_id, Prediction_Gene) %>%
-  slice_max(order_by = Prediction_Score, n = 1, with_ties = FALSE) %>%
+  # ...existing code...
+ebmd_need2 <- ebmd_need %>%
+  group_by(SNPID, Predicted_Gene) %>%
+  slice_max(order_by = Prediction, n = 1, with_ties = FALSE) %>%
   ungroup()
 
-#Rowbind them together into one dataset. 
-combined_data <- rbind(filtered_bmd,filtered_ebmd)
 
-#Do one more filter to see whether there are same pair shows up in both BMD and eBMD results. 
-combined_clean <- combined_data %>%
-  group_by(SNP_id, Prediction_Gene) %>%
-  summarise(
-    n_sources = n_distinct(Source),
-    Combined_Source = ifelse(n_sources > 1, paste(sort(unique(Source)), collapse = "; "), unique(Source)),
-    Prediction_Score = max(Prediction_Score),
-    Prediction_Score_Source = Source[which.max(Prediction_Score)],
-    .groups = 'drop'
-  )
+#Define locus flanking
+ebmd_need2$pos_min <- ebmd_need2$Position - 50000
+ebmd_need2$pos_max <- ebmd_need2$Position + 50000
 
-#No overlap. Now can write out the combined_data file. 
-write.csv(combined_data, "/mnt/Storage2/lishalin/EPFinder_Enrichment/Prediction_Gene_Combined_05192025.csv")
+#add SNP resource
+ebmd_need2$Existence  <- "eBMD"
+
+#Now look at BMD_need data. Look at the Column chr and position. Compare it with the ebmd_need1 data. 
+#If same chr number, and the position falls within the pos_min and pos_max range, then: 
+#Assign the L.Bin from ebmd_need2 to bmd_need1 (create a new column called L.Bin in bmd_need1).
+#If the positions fall into multiple flanking regions of the L.Bin in ebmd_need2
+#Then append the LBin numbers by;, and add that character to the L.Bin in bmd_need1.
+
+# Assume bmd_need1 is a copy of bmd_need with unique rows
+bmd_need1 <- copy(bmd_need)
+
+# Make sure columns are numeric for comparison
+bmd_need1$position <- as.numeric(bmd_need1$position)
+ebmd_need2$Position <- as.numeric(ebmd_need2$Position)
+ebmd_need2$pos_min <- as.numeric(ebmd_need2$pos_min)
+ebmd_need2$pos_max <- as.numeric(ebmd_need2$pos_max)
+
+# Assign a unique L.Bin to each row in ebmd_need2 if not already present
+if (!"L.Bin" %in% names(ebmd_need2)) {
+  ebmd_need2$L.Bin <- seq_len(nrow(ebmd_need2))
+}
+
+# For each row in bmd_need1, find all L.Bin(s) in ebmd_need2 where chr matches and position is within pos_min/pos_max
+library(dplyr)
+
+bmd_need1 <- bmd_need1 %>%
+  rowwise() %>%
+  mutate(
+    L.Bin = paste(
+      ebmd_need2$L.Bin[
+        ebmd_need2$chr == chr &
+        position >= ebmd_need2$pos_min &
+        position <= ebmd_need2$pos_max
+      ],
+      collapse = ";"
+    )
+  ) %>%
+  ungroup()
+
+#Rearrange bmd_need_unique_new columns so that the format matches the ebmd_need2
+ebmd_for_merge <- ebmd_need2[,-c(9:10)]
+
+bmd_for_merge <- bmd_need_unique_new
+bmd_for_merge$Existence <- "BMD"
+colnames(bmd_for_merge)<- c("SNPID","Predicted_Gene","Prediction","chr","Position","Ref","Alt","L.BIN","Existence")
+
+#Rearrange column sequence of bmd_for_merge to the sequence in ebmd_for_merge
+colnames(ebmd_for_merge)
+bmd_for_merge <- bmd_for_merge[,c("SNPID","Predicted_Gene","Prediction","L.BIN","chr","Position","Ref","Alt","Existence")]
+
+
+#Now merge the two datasets together.
+combined_data <- rbind(ebmd_for_merge, bmd_for_merge)
+
+#Now start the filtering process.
+#For rows that contains the same number for L.BIN, Keep the row with the highest value in column 3 (Prediction).
+#Add a column called Source, and assign the value "eBMD" or "BMD" to the rows accordingly.
+#Also if this process happens, then change the value in Existence to "eBMD; BMD".
+# ...existing code...
+
+# Now start the filtering process.
+# For rows that contain the same number for L.BIN, keep the row with the highest value in column 3 (Prediction).
+# Add a column called Source, and assign the value "eBMD" or "BMD" to the rows accordingly.
+# If a row is present in both, change Existence to "eBMD; BMD".
+
+# ...existing code...
+combine_data_1 <- combine_data %>%
+  group_by(L.BIN) %>%
+  mutate(
+    is_empty = is.na(L.BIN) | L.BIN == ""
+  ) %>%
+  filter(
+    is_empty | Prediction == max(Prediction, na.rm = TRUE)
+  ) %>%
+  mutate(
+    Source = ifelse(is_empty, NA, Existence),
+    Existence = ifelse(is_empty, Existence, "eBMD; BMD")
+  ) %>%
+  ungroup() %>%
+  select(-is_empty)
+
+
 
 
 #Now get the list of genes
@@ -215,4 +289,3 @@ write_xlsx(data_neg,"/mnt/Storage2/lishalin/EPFinder_Enrichment/GSEA_preranked_C
 
 
 
- 
