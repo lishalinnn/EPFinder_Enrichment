@@ -110,7 +110,7 @@ combined_data <- rbind(ebmd_for_merge, bmd_for_merge)
 # If a row is present in both, change Existence to "eBMD; BMD".
 
 # ...existing code...
-combine_data_1 <- combine_data %>%
+combined_data1 <- combined_data %>%
   group_by(L.BIN) %>%
   mutate(
     is_empty = is.na(L.BIN) | L.BIN == ""
@@ -124,6 +124,82 @@ combine_data_1 <- combine_data %>%
   ) %>%
   ungroup() %>%
   select(-is_empty)
+
+
+combined_data1$Source<-ifelse(is.na(combined_data1$Source), combined_data1$Existence, combined_data1$Source)
+
+write.csv(combined_data1, "/mnt/Storage2/lishalin/EPFinder_Enrichment/Combine_EPFinder_Results_06262025.csv",row.names = F)
+#Now we have the combined data, we can start the enrichment analysis.
+subset_combine <- combined_data1[,c(2,3)]
+
+subset_combine1 <- subset_combine %>%
+  arrange(desc(Prediction))
+
+combined_data1_max <- subset_combine1 %>%
+  group_by(Prediction_Gene) %>%
+  slice_max(order_by = Prediction, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+write.table(combined_data1_max, file = "/mnt/Storage2/lishalin/EPFinder_Enrichment/Gene_for_enrichment_Ranked_06262025.rnk", sep = "\t", row.names = FALSE, col.names = FALSE, quote = FALSE)
+
+#Use GSEA to do the enrichment analysis
+#transform all tsv file to excel file.
+library(data.table)
+#H
+data_pos <- fread("/mnt/Storage2/lishalin/EPFinder_Enrichment/New_GSEAPreRank_Results/gsea_report_for_na_pos_H.tsv")
+data_neg <- fread("/mnt/Storage2/lishalin/EPFinder_Enrichment/New_GSEAPreRank_Results/gsea_report_for_na_neg_H.tsv")
+
+write_xlsx(data_pos,"/mnt/Storage2/lishalin/EPFinder_Enrichment/GSEA_preranked_H_pos.xlsx")
+write_xlsx(data_neg,"/mnt/Storage2/lishalin/EPFinder_Enrichment/GSEA_preranked_H_neg.xlsx")
+
+
+#C2
+data_pos <- fread("/mnt/Storage2/lishalin/EPFinder_Enrichment/gsea_report_for_na_pos_C2.tsv")
+data_neg <- fread("/mnt/Storage2/lishalin/EPFinder_Enrichment/gsea_report_for_na_neg_C2.tsv")
+
+write_xlsx(data_pos,"/mnt/Storage2/lishalin/EPFinder_Enrichment/GSEA_preranked_C2_pos.xlsx")
+write_xlsx(data_neg,"/mnt/Storage2/lishalin/EPFinder_Enrichment/GSEA_preranked_C2_neg.xlsx")
+
+
+#C3
+data_pos <- fread("/mnt/Storage2/lishalin/EPFinder_Enrichment/gsea_report_for_na_pos_C3.tsv")
+data_neg <- fread("/mnt/Storage2/lishalin/EPFinder_Enrichment/gsea_report_for_na_neg_C3.tsv")
+
+write_xlsx(data_pos,"/mnt/Storage2/lishalin/EPFinder_Enrichment/GSEA_preranked_C3_pos.xlsx")
+write_xlsx(data_neg,"/mnt/Storage2/lishalin/EPFinder_Enrichment/GSEA_preranked_C3_neg.xlsx")
+
+#C5
+data_pos <- fread("/mnt/Storage2/lishalin/EPFinder_Enrichment/gsea_report_for_na_pos_C5.tsv")
+data_neg <- fread("/mnt/Storage2/lishalin/EPFinder_Enrichment/gsea_report_for_na_neg_C5.tsv")
+
+write_xlsx(data_pos,"/mnt/Storage2/lishalin/EPFinder_Enrichment/GSEA_preranked_C5_pos.xlsx")
+write_xlsx(data_neg,"/mnt/Storage2/lishalin/EPFinder_Enrichment/GSEA_preranked_C5_neg.xlsx")
+
+
+#C8
+data_pos <- fread("/mnt/Storage2/lishalin/EPFinder_Enrichment/gsea_report_for_na_pos_C8.tsv")
+data_neg <- fread("/mnt/Storage2/lishalin/EPFinder_Enrichment/gsea_report_for_na_neg_C8.tsv")
+
+write_xlsx(data_pos,"/mnt/Storage2/lishalin/EPFinder_Enrichment/GSEA_preranked_C8_pos.xlsx")
+write_xlsx(data_neg,"/mnt/Storage2/lishalin/EPFinder_Enrichment/GSEA_preranked_C8_neg.xlsx")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
