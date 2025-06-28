@@ -7,6 +7,50 @@ library(writexl)
 library(dplyr)
 library(cmapR)
 
+library(data.table)
+library(readxl)
+library(writexl)
+library(dplyr)
+library(cmapR)
+
+
+#Read in Morris et al. GWAS summary statistics
+morris_gwas <- fread("/mnt/Storage2/lishalin/EPFinder_Enrichment/Biobank2-British-Bmd-As-C-Gwas-SumStats.txt.gz", header = TRUE, sep = "\t")
+morris_gwas_p <- morris_gwas[,c("SNPID","P")]
+
+ebmd <- read.csv("/mnt/Storage2/lishalin/EPFinder_Enrichment/cojo_bf3_EPFinder_final.csv")
+ebmd_subset <- unique(ebmd[,c("SNPID_at_Enh","L.BIN","Chr","Position","Ref","Alt")])
+colnames(ebmd_subset)[1]<-"SNPID"
+
+ebmd_subset <-merge(ebmd_subset, morris_gwas_p, by="SNPID") 
+
+#Lead SNP decision
+lead_snp_per_loci <- ebmd_subset %>%
+  group_by(L.BIN) %>%
+  slice_min(order_by = P, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+write.csv(lead_snp_per_loci, "/mnt/Storage2/lishalin/EPFinder_Enrichment/Lead_snp_per_loci_06282025.csv",row.names = F)
+
+#Define locus flanking
+lead_snp_per_loci$pos_min <- lead_snp_per_loci$Position - 50000
+lead_snp_per_loci$pos_max <- lead_snp_per_loci$Position + 50000
+
+
+start here next time.
+Jun 28 2025
+
+
+
+
+
+
+
+
+
+
+
+
 #read in data
 bmd <- fread("/mnt/Storage2/lishalin/EPFinder_Enrichment/BMD_EPFinder_prediction.tsv")
 ebmd <- read.csv("/mnt/Storage2/lishalin/EPFinder_Enrichment/cojo_bf3_EPFinder_final.csv")
