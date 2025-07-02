@@ -1,40 +1,130 @@
 
 #Setp1: merged in gwas results in BMD results-----
 
-library(data.table)
-library(readxl)
-library(writexl)
-library(dplyr)
-library(cmapR)
+import pandas as pd
+import numpy as np
 
-library(data.table)
-library(readxl)
-library(writexl)
-library(dplyr)
-library(cmapR)
+# Read in Morris et al. GWAS summary statistics
+morris_gwas = pd.read_csv(
+    "/mnt/Storage2/lishalin/EPFinder_Enrichment/Biobank2-British-Bmd-As-C-Gwas-SumStats.txt.gz",
+    sep="\t"
+)
+morris_gwas_p = morris_gwas[["SNPID", "P"]]
+
+# Read in eBMD data
+ebmd = pd.read_csv("/mnt/Storage2/lishalin/EPFinder_Enrichment/cojo_bf3_EPFinder_final.csv")
+
+# Select relevant columns and remove duplicates
+ebmd_subset = ebmd[["SNPID_at_Enh", "L.BIN", "Chr", "Position", "Ref", "Alt"]].drop_duplicates()
+ebmd_subset = ebmd_subset.rename(columns={"SNPID_at_Enh": "SNPID"})
+
+# Merge with GWAS p-values
+ebmd_subset = pd.merge(ebmd_subset, morris_gwas_p, on="SNPID", how="left")
+
+# Lead SNP decision: for each L.BIN, select row with minimum P
+lead_snp_per_loci = (
+    ebmd_subset.loc[ebmd_subset.groupby("L.BIN")["P"].idxmin()]
+    .reset_index(drop=True)
+)
+
+from pyliftover import LiftOver
+import pandas as pd
+
+#Change the value 23 in Chr to X
+lead_snp_per_loci["Chr"] = lead_snp_per_loci["Chr"].replace(23, "X")
+# Change the value 24 in Chr to Y 
+lead_snp_per_loci["Chr"] = lead_snp_per_loci["Chr"].replace(24, "Y")
 
 
-#Read in Morris et al. GWAS summary statistics
-morris_gwas <- fread("/mnt/Storage2/lishalin/EPFinder_Enrichment/Biobank2-British-Bmd-As-C-Gwas-SumStats.txt.gz", header = TRUE, sep = "\t")
-morris_gwas_p <- morris_gwas[,c("SNPID","P")]
+# Initialize liftover object
+lo = LiftOver('/mnt/Storage2/lishalin/EPFinder_Enrichment/hg19ToHg38.over.chain.gz')  # <-- update this path
 
-ebmd <- read.csv("/mnt/Storage2/lishalin/EPFinder_Enrichment/cojo_bf3_EPFinder_final.csv")
-ebmd_subset <- unique(ebmd[,c("SNPID_at_Enh","L.BIN","Chr","Position","Ref","Alt")])
-colnames(ebmd_subset)[1]<-"SNPID"
 
-ebmd_subset <-merge(ebmd_subset, morris_gwas_p, by="SNPID") 
+# Function to liftover a single row
+def liftover_row(row):
+    chrom = str(row['Chr'])
+    if not chrom.startswith('chr'):
+        chrom = 'chr' + chrom
+    pos = int(row['Position'])
+    lifted = lo.convert_coordinate(chrom, pos)
+    if lifted:
+        # lifted is a list of tuples: (chr, pos, strand, original_pos)
+        new_chrom, new_pos = lifted[0][0], int(lifted[0][1])
+        return pd.Series([new_chrom, new_pos])
+    else:
+        return pd.Series([None, None])
 
-#Lead SNP decision
-lead_snp_per_loci <- ebmd_subset %>%
-  group_by(L.BIN) %>%
-  slice_min(order_by = P, n = 1, with_ties = FALSE) %>%
-  ungroup()
+# Apply liftover to each row
+lead_snp_per_loci[['Chr_hg38', 'Position_hg38']] = lead_snp_per_loci.apply(liftover_row, axis=1)
 
-write.csv(lead_snp_per_loci, "/mnt/Storage2/lishalin/EPFinder_Enrichment/Lead_snp_per_loci_06282025.csv",row.names = F)
+# Define locus flanking
+lead_snp_per_loci["pos_min"] = lead_snp_per_loci["Position_hg38"] - 50000
+lead_snp_per_loci["pos_max"] = lead_snp_per_loci["Position_hg38"] + 50000
 
-#Define locus flanking
-lead_snp_per_loci$pos_min <- lead_snp_per_loci$Position - 50000
-lead_snp_per_loci$pos_max <- lead_snp_per_loci$Position + 50000
+# Save the result
+#lead_snp_per_loci.to_csv("/mnt/Storage2/lishalin/EPFinder_Enrichment/Lead_snp_per_loci_hg38.csv", index=False)
+
+#Assign locus to BMD file based on the lead SNP per loci in eBMD file.
+# Read the BMD prediction file
+bmd = pd.read_csv("/mnt/Storage2/lishalin/EPFinder_Enrichment/BMD_EPFinder_prediction.tsv", sep="\t")
+
+# Split the "SNPID hg38" column into four columns: chr, position, ref, alt
+bmd[['chr', 'position', 'ref', 'alt']] = bmd['SNPID hg38'].str.split(':', expand=True)
+
+#Assign L.BIN to BMD based on Chr and position
+bmd['position'] = pd.to_numeric(bmd['position'])
+lead_snp_per_loci['pos_min'] = pd.to_numeric(lead_snp_per_loci['pos_min'])
+lead_snp_per_loci['pos_max'] = pd.to_numeric(lead_snp_per_loci['pos_max'])
+
+# Assign L.BIN to each BMD row based on chr and position overlap
+def assign_lbin(row):
+    matches = lead_snp_per_loci[
+        (lead_snp_per_loci['Chr'].astype(str) == str(row['chr'])) &
+        (row['position'] >= lead_snp_per_loci['pos_min']) &
+        (row['position'] <= lead_snp_per_loci['pos_max'])
+    ]['L.BIN']
+    return ";".join(str(x) for x in matches) if not matches.empty else ""
+
+bmd['L.BIN'] = bmd.apply(assign_lbin, axis=1)
+
+
+#Show rows in bmd that have L.BIN assigned
+bmd_result = bmd[bmd['L.BIN'] != ""]
+
+#Now, within bmd_result, for each unique L.BIN, only keep one row with the highest value in column 3 (Prediction).
+#If there is no L.BIN value, then just keep the row in the data without any modification.
+# For rows with L.BIN assigned, keep only the row with the highest Prediction per L.BIN.
+# For rows with no L.BIN, keep them as is.
+
+# Ensure Prediction is numeric
+bmd['prediction'] = pd.to_numeric(bmd['prediction'], errors='coerce')
+
+# Split into two: with and without L.BIN
+bmd_with_lbin = bmd[bmd['L.BIN'] != ""].copy()
+bmd_without_lbin = bmd[bmd['L.BIN'] == ""].copy()
+
+# For those with L.BIN, keep only the row with the highest Prediction per L.BIN
+bmd_with_lbin_max = (
+    bmd_with_lbin.loc[bmd_with_lbin.groupby('L.BIN')['prediction'].idxmax()]
+    .reset_index(drop=True)
+)
+
+# Combine back together
+#bmd_result_final = pd.concat([bmd_with_lbin_max, bmd_without_lbin], ignore_index=True)
+
+
+Now we have the two datasets, start merging. 
+#also liftover for the ebmd dataset.
+
+Between ebmd and BMD dataset, 
+
+
+
+
+
+
+
+
 
 
 start here next time.
