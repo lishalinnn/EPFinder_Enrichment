@@ -3,6 +3,7 @@
 
 import pandas as pd
 import numpy as np
+from pyliftover import LiftOver
 
 # Read in Morris et al. GWAS summary statistics
 morris_gwas = pd.read_csv(
@@ -14,8 +15,33 @@ morris_gwas_p = morris_gwas[["SNPID", "P"]]
 # Read in eBMD data
 ebmd = pd.read_csv("/mnt/Storage2/lishalin/EPFinder_Enrichment/cojo_bf3_EPFinder_final.csv")
 
+# Change 23 to X and 24 to Y in Chr
+ebmd["Chr"] = ebmd["Chr"].replace(23, "X").replace(24, "Y")
+
+# Initialize liftover object
+lo = LiftOver('/mnt/Storage2/lishalin/EPFinder_Enrichment/hg38ToHg19.over.chain.gz')
+
+# Liftover function
+def liftover_row(row):
+    chrom = str(row['Chr'])
+    if not chrom.startswith('chr'):
+        chrom = 'chr' + chrom
+    pos = int(row['Position'])
+    lifted = lo.convert_coordinate(chrom, pos)
+    if lifted:
+        new_chrom, new_pos = lifted[0][0], int(lifted[0][1])
+        return pd.Series([new_chrom, new_pos])
+    else:
+        return pd.Series([None, None])
+
+# Apply liftover to ebmd
+ebmd[['Chr_hg38', 'Position_hg38']] = ebmd.apply(liftover_row, axis=1)
+
+# Save the ebmd file with liftover results
+#ebmd.to_csv("/mnt/Storage2/lishalin/EPFinder_Enrichment/cojo_bf3_EPFinder_final_hg38.csv", index=False)
+
 # Select relevant columns and remove duplicates
-ebmd_subset = ebmd[["SNPID_at_Enh", "L.BIN", "Chr", "Position", "Ref", "Alt"]].drop_duplicates()
+ebmd_subset = ebmd[["SNPID_at_Enh", "L.BIN", "Chr_hg38", "Position_hg38", "Ref", "Alt"]].drop_duplicates()
 ebmd_subset = ebmd_subset.rename(columns={"SNPID_at_Enh": "SNPID"})
 
 # Merge with GWAS p-values
@@ -27,8 +53,6 @@ lead_snp_per_loci = (
     .reset_index(drop=True)
 )
 
-from pyliftover import LiftOver
-import pandas as pd
 
 #Change the value 23 in Chr to X
 lead_snp_per_loci["Chr"] = lead_snp_per_loci["Chr"].replace(23, "X")
@@ -67,12 +91,16 @@ lead_snp_per_loci["pos_max"] = lead_snp_per_loci["Position_hg38"] + 50000
 #Assign locus to BMD file based on the lead SNP per loci in eBMD file.
 # Read the BMD prediction file
 bmd = pd.read_csv("/mnt/Storage2/lishalin/EPFinder_Enrichment/BMD_EPFinder_prediction.tsv", sep="\t")
+lead_snp_per_loci=pd.read_csv("/mnt/Storage2/lishalin/EPFinder_Enrichment/Lead_snp_per_loci_hg38.csv", sep=",")
 
 # Split the "SNPID hg38" column into four columns: chr, position, ref, alt
 bmd[['chr', 'position', 'ref', 'alt']] = bmd['SNPID hg38'].str.split(':', expand=True)
 
 #Assign L.BIN to BMD based on Chr and position
 bmd['position'] = pd.to_numeric(bmd['position'])
+lead_snp_per_loci["pos_min"] = lead_snp_per_loci["Position_hg38"] - 50000
+lead_snp_per_loci["pos_max"] = lead_snp_per_loci["Position_hg38"] + 50000
+
 lead_snp_per_loci['pos_min'] = pd.to_numeric(lead_snp_per_loci['pos_min'])
 lead_snp_per_loci['pos_max'] = pd.to_numeric(lead_snp_per_loci['pos_max'])
 
@@ -108,6 +136,21 @@ bmd_with_lbin_max = (
     bmd_with_lbin.loc[bmd_with_lbin.groupby('L.BIN')['prediction'].idxmax()]
     .reset_index(drop=True)
 )
+
+#For bmd_without_lbin, group by Loci variable and filter the row with the highest prediction score.
+# Ensure prediction is numeric
+bmd_without_lbin['prediction'] = pd.to_numeric(bmd_without_lbin['prediction'], errors='coerce')
+
+# Group by 'Loci' and keep the row with the highest prediction in each group
+bmd_without_lbin_max = (
+    bmd_without_lbin.loc[bmd_without_lbin.groupby('Loci')['prediction'].idxmax()]
+    .reset_index(drop=True)
+)
+
+bmd_result_final = pd.concat([bmd_with_lbin_max, bmd_without_lbin_max], ignore_index=True)
+
+bmd_result_final.to_csv("/mnt/Storage2/lishalin/EPFinder_Enrichment/BMD_Lbin_Max.csv", index=False)
+
 
 # Combine back together
 #bmd_result_final = pd.concat([bmd_with_lbin_max, bmd_without_lbin], ignore_index=True)
